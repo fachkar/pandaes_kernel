@@ -42,7 +42,14 @@ MODULE_VERSION("0.5.2");
 
 #define DEVICE_NAME     "leds"
 
-struct pardevice *pdev;
+struct leds_dev {
+    char  name[32];
+    struct cdev cdev;
+    struct parport_driver leds_parport_driver;
+    struct pardevice *pdev;
+}*leds_devp;
+
+
 static int
 leds_preempt(void *handle)
 {
@@ -54,10 +61,10 @@ static void
 leds_attach(struct parport *port)
 {
     /* Register the parallel LED device with parport */
-    pdev = parport_register_device(port, DEVICE_NAME,
-                                   leds_preempt, NULL,
-                                   NULL, 0, NULL);
-    if (pdev == NULL) printk("Bad register\n");
+    leds_devp->pdev = parport_register_device(port, DEVICE_NAME,
+				   leds_preempt, NULL,
+				   NULL, 0, NULL);
+    if (leds_devp->pdev == NULL) printk("Bad register\n");
 }
 
 /* Parport detach method */
@@ -66,13 +73,6 @@ leds_detach(struct parport *port)
 {
     /* Do nothing */
 }
-
-struct leds_dev {
-    char  name[32];
-    struct cdev cdev;
-    struct parport_driver leds_parport_driver;
-    struct pardevice *pdev;
-}*leds_devp;
 
 unsigned char port_data_in(unsigned char offset, int bank);
 void port_data_out(unsigned char offset, unsigned char data, int bank);
