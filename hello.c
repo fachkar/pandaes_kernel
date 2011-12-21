@@ -39,9 +39,39 @@ MODULE_DESCRIPTION( "This is leds ch5 ;/");
 MODULE_AUTHOR("ferar aschkar");
 MODULE_VERSION("0.5.2");
 
+
+#define DEVICE_NAME     "leds"
+
+struct pardevice *pdev;
+static int
+leds_preempt(void *handle)
+{
+    return 1;
+}
+
+/* Parport attach method */
+static void
+leds_attach(struct parport *port)
+{
+    /* Register the parallel LED device with parport */
+    pdev = parport_register_device(port, DEVICE_NAME,
+                                   leds_preempt, NULL,
+                                   NULL, 0, NULL);
+    if (pdev == NULL) printk("Bad register\n");
+}
+
+/* Parport detach method */
+static void
+leds_detach(struct parport *port)
+{
+    /* Do nothing */
+}
+
 struct leds_dev {
     char  name[32];
     struct cdev cdev;
+    struct parport_driver leds_parport_driver;
+    struct pardevice *pdev;
 }*leds_devp;
 
 unsigned char port_data_in(unsigned char offset, int bank);
@@ -62,20 +92,20 @@ static struct file_operations leds_fops = {
 static dev_t leds_dev_t_major_number;
 struct class * leds_class;
 
-#define DEVICE_NAME	"leds"
+
 
 
 int
 leds_open(struct inode *inode, struct file *file)
 {
     struct leds_dev *leds_devp;
-    
+
     /* Get the per-device structure that contains this cdev */
     leds_devp = container_of(inode->i_cdev, struct leds_dev, cdev);
-    
+
     /* Easy access to cmos_devp from rest of the entry points */
     file->private_data = leds_devp;
-    
+
     return 0;
 }
 
@@ -85,13 +115,13 @@ leds_release(struct inode *inode, struct file *file)
 {
     /* following is dummy code but might be useful later on*/
     struct leds_dev *leds_devp = file->private_data;
-    
+
     return 0;
 }
 
 // ssize_t
 // leds_read(struct file *file, char *buf,
-// 	  size_t count, loff_t *ppos)
+//        size_t count, loff_t *ppos)
 // {
 //     struct cmos_dev *cmos_devp = file->private_data;
 //     char data[CMOS_BANK_SIZE];
@@ -99,48 +129,48 @@ leds_release(struct inode *inode, struct file *file)
 //     int xferred = 0, i = 0, l, zero_out;
 //     int start_byte = cmos_devp->current_pointer/8;
 //     int start_bit  = cmos_devp->current_pointer%8;
-//     
+//
 //     if (cmos_devp->current_pointer >= cmos_devp->size) {
-// 	return 0; /*EOF*/
+//      return 0; /*EOF*/
 //     }
-//     
+//
 //     /* Adjust count if it edges past the end of the CMOS bank */
 //     if (cmos_devp->current_pointer + count > cmos_devp->size) {
-// 	count = cmos_devp->size - cmos_devp->current_pointer;
+//      count = cmos_devp->size - cmos_devp->current_pointer;
 //     }
-//     
+//
 //     /* Get the specified number of bits from the CMOS */
 //     while (xferred < count) {
-// 	data[i] = port_data_in(start_byte, cmos_devp->bank_number)
-// 	>> start_bit;
-// 	xferred += (8 - start_bit);
-// 	if ((start_bit) && (count + start_bit > 8)) {
-// 	    data[i] |= (port_data_in (start_byte + 1,
-// 				      cmos_devp->bank_number) << (8 - start_bit));
-// 	    xferred += start_bit;
-// 	}
-// 	start_byte++;
-// 	i++;
+//      data[i] = port_data_in(start_byte, cmos_devp->bank_number)
+//      >> start_bit;
+//      xferred += (8 - start_bit);
+//      if ((start_bit) && (count + start_bit > 8)) {
+//          data[i] |= (port_data_in (start_byte + 1,
+//                                    cmos_devp->bank_number) << (8 - start_bit));
+//          xferred += start_bit;
+//      }
+//      start_byte++;
+//      i++;
 //     }
 //     if (xferred > count) {
-// 	/* Zero out (xferred-count) bits from the MSB
-// 	 of the last dat*a byte */
-// 	zero_out = xferred - count;
-// 	mask = 1 << (8 - zero_out);
-// 	for (l=0; l < zero_out; l++) {
-// 	    data[i-1] &= ~mask;
-// 	    mask <<= 1;
-// 	}
-// 	xferred = count;
+//      /* Zero out (xferred-count) bits from the MSB
+//       of the last dat*a byte */
+//      zero_out = xferred - count;
+//      mask = 1 << (8 - zero_out);
+//      for (l=0; l < zero_out; l++) {
+//          data[i-1] &= ~mask;
+//          mask <<= 1;
+//      }
+//      xferred = count;
 //     }
-//     
+//
 //     if (!xferred) return -EIO;
-//     
+//
 //     /* Copy the read bits to the user buffer */
 //     if (copy_to_user(buf, (void *)data, ((xferred/8)+1)) != 0) {
-// 	return -EIO;
+//      return -EIO;
 //     }
-//     
+//
 //     /* Increment the file pointer by the number of xferred bits */
 //     cmos_devp->current_pointer += xferred;
 //     return xferred; /* Number of bits read */
@@ -148,71 +178,76 @@ leds_release(struct inode *inode, struct file *file)
 
 
 ssize_t
-cmos_write(struct file *file, const char *buf,
-	   size_t count, loff_t *ppos)
+leds_write(struct file *file, const char *buf,
+           size_t count, loff_t *ppos)
 {
     struct leds_dev *leds_devp = file->private_data;
-    
-    return xferred; /* Return the number of written bits */
+    return 0;
 }
 
 
 int __init leds_init(void) {
     int i;
     if (alloc_chrdev_region(&leds_dev_t_major_number,0, 1, DEVICE_NAME) < 0) {
-	printk(KERN_DEBUG "Can't register device\n");
-	return -1;
+        printk(KERN_DEBUG "Can't register device\n");
+        return -1;
     }
-    
+
     leds_class = class_create(THIS_MODULE, DEVICE_NAME);
     if (IS_ERR(leds_class)) {
-	printk("Bad class create\n");
-	return -1;
+        printk("Bad class create\n");
+        return -1;
     }
 
     leds_devp = kmalloc(sizeof(struct leds_dev), GFP_KERNEL);
     if (!leds_devp) {
-	printk("failed to kmalloc device leds_devp!\n");
-	return -1;
+        printk("failed to kmalloc device leds_devp!\n");
+        return -1;
     }
-    
-    leds_devp->name = DEVICE_NAME;
+
+    leds_devp->leds_parport_driver.name = DEVICE_NAME;
+    leds_devp->leds_parport_driver.attach = leds_attach;
+    leds_devp->leds_parport_driver.detach = leds_detach;
+
+    sprintf(leds_devp->name , "%s", DEVICE_NAME);
     cdev_init(&leds_devp->cdev, &leds_fops);
     leds_devp->cdev.owner = THIS_MODULE;
 
     if (cdev_add(&leds_devp->cdev, leds_dev_t_major_number,1)) {
-	printk("could't add cdev\n");
-	
-	if (leds_devp) {
-	    cdev_del(&leds_devp->cdev);
-	    kfree(leds_devp);
-	}
-	return -1;
+        printk("could't add cdev\n");
+
+        if (leds_devp) {
+            cdev_del(&leds_devp->cdev);
+            kfree(leds_devp);
+        }
+        return -1;
     }
-    
+
     device_create(leds_class, NULL, leds_dev_t_major_number , NULL, DEVICE_NAME);
-    
+
+//     if(parport_register_driver(&leds_dev))
+
     printk("LEDS module initialized!\n");
-    
+
     return 0;
-    
+
 }
 
-void __exit cmos_exit(void)
+void __exit leds_exit(void)
 {
     if (leds_devp) {
-	printk("LEDS module free-ing\n");
-	cdev_del(&leds_devp->cdev);
-	kfree(leds_devp);
+        printk("LEDS module free-ing\n");
+        cdev_del(&leds_devp->cdev);
+        kfree(leds_devp);
     }
-    
+
     printk("unregister_chrdev_region\n");
     unregister_chrdev_region(leds_dev_t_major_number, 1);
-    
+
     printk("class_destroy\n");
     class_destroy(leds_class);
     return;
 }
 
-module_init(cmos_init);
-module_exit(cmos_exit);
+module_init(leds_init);
+module_exit(leds_exit);
