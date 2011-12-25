@@ -45,6 +45,7 @@ MODULE_VERSION("0.5.2");
 struct leds_dev {
     char  name[32];
     struct cdev cdev;
+    struct device *leds_device;
     struct parport_driver leds_parport_driver;
     struct pardevice *pdev;
 }*leds_devp;
@@ -62,8 +63,8 @@ leds_attach(struct parport *port)
 {
     /* Register the parallel LED device with parport */
     leds_devp->pdev = parport_register_device(port, DEVICE_NAME,
-				   leds_preempt, NULL,
-				   NULL, 0, NULL);
+                      leds_preempt, NULL,
+                      NULL, 0, NULL);
     if (leds_devp->pdev == NULL) printk("Bad register\n");
 }
 
@@ -188,21 +189,27 @@ leds_write(struct file *file, const char *buf,
 
 int __init leds_init(void) {
     int i;
-    if (alloc_chrdev_region(&leds_dev_t_major_number,0, 1, DEVICE_NAME) < 0) {
-        printk(KERN_DEBUG "Can't register device\n");
-        return -1;
+    int ret = -ENODEV;
+    ret = alloc_chrdev_region(&leds_dev_t_major_number,0, 1, DEVICE_NAME);
+    if ( ret < 0) {
+        printk(KERN_ERR "alloc_chrdev_region failed for %s line: %d\n", DEVICE_NAME, __LINE__);
+        return ret;
     }
 
     leds_class = class_create(THIS_MODULE, DEVICE_NAME);
     if (IS_ERR(leds_class)) {
-        printk("Bad class create\n");
-        return -1;
+        printk(KERN_ERR "class_create failed for %s line: %d\n", DEVICE_NAME, __LINE__);
+        unregister_chrdev_region(leds_dev_t_major_number, 1);
+        return PTR_ERR(leds_class);
     }
 
     leds_devp = kmalloc(sizeof(struct leds_dev), GFP_KERNEL);
     if (!leds_devp) {
-        printk("failed to kmalloc device leds_devp!\n");
-        return -1;
+        printk(KERN_ERR "kmalloc failed for %s line: %d\n", DEVICE_NAME, __LINE__);
+        unregister_chrdev_region(leds_dev_t_major_number, 1);
+        class_destroy(leds_class);
+        leds_devp = NULL;
+        return -ENOMEM;
     }
 
     leds_devp->leds_parport_driver.name = DEVICE_NAME;
@@ -213,19 +220,45 @@ int __init leds_init(void) {
     cdev_init(&leds_devp->cdev, &leds_fops);
     leds_devp->cdev.owner = THIS_MODULE;
 
-    if (cdev_add(&leds_devp->cdev, leds_dev_t_major_number,1)) {
-        printk("could't add cdev\n");
-
+    ret = cdev_add(&leds_devp->cdev, leds_dev_t_major_number,1);
+    if (ret < 0) {
+        printk(KERN_ERR "cdev_add failed for %s line: %d\n", DEVICE_NAME, __LINE__);
+        unregister_chrdev_region(leds_dev_t_major_number, 1);
+        class_destroy(leds_class);
         if (leds_devp) {
             cdev_del(&leds_devp->cdev);
             kfree(leds_devp);
+            leds_devp = NULL;
         }
-        return -1;
+        return ret;
     }
 
-    device_create(leds_class, NULL, leds_dev_t_major_number , NULL, DEVICE_NAME);
+    leds_devp->leds_device = device_create(leds_class, NULL, leds_dev_t_major_number , NULL, DEVICE_NAME);
+    if (IS_ERR(leds_devp->leds_device)) {
+        printk(KERN_ERR "device_create failed for %s line: %d\n", DEVICE_NAME, __LINE__);
+        unregister_chrdev_region(leds_dev_t_major_number, 1);
+        class_destroy(leds_class);
+        if (leds_devp) {
+            cdev_del(&leds_devp->cdev);
+            kfree(leds_devp);
+            leds_devp = NULL;
+        }
+        return PTR_ERR(leds_devp->leds_device);
+    }
 
-//     if(parport_register_driver(&leds_dev))
+    ret = parport_register_driver(&leds_devp->leds_parport_driver);
+    if (ret) {
+        printk(KERN_ERR "parport_register_driver failed for %s line: %d\n", DEVICE_NAME, __LINE__);
+        if (leds_devp) {
+            cdev_del(&leds_devp->cdev);
+            device_del(leds_devp->leds_device);
+            kfree(leds_devp);
+            leds_devp = NULL;
+        }
+        unregister_chrdev_region(leds_dev_t_major_number, 1);
+        class_destroy(leds_class);
+        return ret;
+    }
 
     printk("LEDS module initialized!\n");
 
@@ -238,7 +271,9 @@ void __exit leds_exit(void)
     if (leds_devp) {
         printk("LEDS module free-ing\n");
         cdev_del(&leds_devp->cdev);
+        device_del(leds_devp->leds_device);
         kfree(leds_devp);
+        leds_devp = NULL;
     }
 
     printk("unregister_chrdev_region\n");
