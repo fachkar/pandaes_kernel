@@ -120,62 +120,22 @@ leds_release(struct inode *inode, struct file *file)
     return 0;
 }
 
-// ssize_t
-// leds_read(struct file *file, char *buf,
-//        size_t count, loff_t *ppos)
-// {
-//     struct cmos_dev *cmos_devp = file->private_data;
-//     char data[CMOS_BANK_SIZE];
-//     unsigned char mask;
-//     int xferred = 0, i = 0, l, zero_out;
-//     int start_byte = cmos_devp->current_pointer/8;
-//     int start_bit  = cmos_devp->current_pointer%8;
-//
-//     if (cmos_devp->current_pointer >= cmos_devp->size) {
-//      return 0; /*EOF*/
-//     }
-//
-//     /* Adjust count if it edges past the end of the CMOS bank */
-//     if (cmos_devp->current_pointer + count > cmos_devp->size) {
-//      count = cmos_devp->size - cmos_devp->current_pointer;
-//     }
-//
-//     /* Get the specified number of bits from the CMOS */
-//     while (xferred < count) {
-//      data[i] = port_data_in(start_byte, cmos_devp->bank_number)
-//      >> start_bit;
-//      xferred += (8 - start_bit);
-//      if ((start_bit) && (count + start_bit > 8)) {
-//          data[i] |= (port_data_in (start_byte + 1,
-//                                    cmos_devp->bank_number) << (8 - start_bit));
-//          xferred += start_bit;
-//      }
-//      start_byte++;
-//      i++;
-//     }
-//     if (xferred > count) {
-//      /* Zero out (xferred-count) bits from the MSB
-//       of the last dat*a byte */
-//      zero_out = xferred - count;
-//      mask = 1 << (8 - zero_out);
-//      for (l=0; l < zero_out; l++) {
-//          data[i-1] &= ~mask;
-//          mask <<= 1;
-//      }
-//      xferred = count;
-//     }
-//
-//     if (!xferred) return -EIO;
-//
-//     /* Copy the read bits to the user buffer */
-//     if (copy_to_user(buf, (void *)data, ((xferred/8)+1)) != 0) {
-//      return -EIO;
-//     }
-//
-//     /* Increment the file pointer by the number of xferred bits */
-//     cmos_devp->current_pointer += xferred;
-//     return xferred; /* Number of bits read */
-// }
+ssize_t
+leds_read(struct file *file, char *buf,
+       size_t count, loff_t *ppos)
+{
+    unsigned char byte;
+    struct leds_dev *leds_devp = file->private_data;
+    parport_claim_or_block(leds_devp->pdev);
+    byte = parport_read_data(leds_devp->pdev->port);
+    parport_release(leds_devp->pdev);
+
+    if(copy_to_user(buf, &byte,1)){
+        printk(KERN_ERR "copy_from_user failed for %s line: %d\n", DEVICE_NAME, __LINE__);
+        return -EFAULT;
+    }
+    return 0;
+}
 
 
 ssize_t
@@ -183,12 +143,21 @@ leds_write(struct file *file, const char *buf,
            size_t count, loff_t *ppos)
 {
     struct leds_dev *leds_devp = file->private_data;
+    char kbuf;
+    if(copy_from_user(&kbuf, buf,1)){
+        printk(KERN_ERR "copy_from_user failed for %s line: %d\n", DEVICE_NAME, __LINE__);
+        return -EFAULT;
+    }
+
+    parport_claim_or_block(leds_devp->pdev);
+    parport_write_data(leds_devp->pdev->port, kbuf);
+    parport_release(leds_devp->pdev);
     return 0;
 }
 
 
 int __init leds_init(void) {
-    int i;
+
     int ret = -ENODEV;
     ret = alloc_chrdev_region(&leds_dev_t_major_number,0, 1, DEVICE_NAME);
     if ( ret < 0) {
@@ -268,6 +237,8 @@ int __init leds_init(void) {
 
 void __exit leds_exit(void)
 {
+    printk(KERN_DEBUG "parport_unregister_driver\n");
+    parport_unregister_driver(&leds_devp->leds_parport_driver);
     if (leds_devp) {
         printk("LEDS module free-ing\n");
         cdev_del(&leds_devp->cdev);
