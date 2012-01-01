@@ -24,8 +24,8 @@
 
 #include <linux/platform_device.h>
 
-#include <asm/system.h>         /* cli(), *_flags */
-#include <asm/uaccess.h>        /* copy_*_user */
+#include <asm/system.h>     /* cli(), *_flags */
+#include <asm/uaccess.h>    /* copy_*_user */
 
 #include <linux/device.h>
 #include <linux/hid.h>
@@ -34,226 +34,266 @@
 #include <linux/list.h>
 
 
-MODULE_LICENSE ( "Dual BSD/GPL" );
-MODULE_DESCRIPTION( "This is leds ch5 ;/");
-MODULE_AUTHOR("ferar aschkar");
-MODULE_VERSION("0.5.2");
+MODULE_LICENSE ("Dual BSD/GPL");
+MODULE_DESCRIPTION ("This is leds ch5 ;/");
+MODULE_AUTHOR ("ferar aschkar");
+MODULE_VERSION ("0.5.2");
 
 
-#define DEVICE_NAME     "leds"
+#define DEVICE_NAME     "ledso"
 
-struct leds_dev {
-    char  name[32];
-    struct cdev cdev;
-    struct device *leds_device;
-    struct parport_driver leds_parport_driver;
-    struct pardevice *pdev;
-}*leds_devp;
+struct leds_dev
+{
+  char name[32];
+  struct cdev cdev;
+  struct device *leds_device;
+  struct parport_driver leds_parport_driver;
+  struct pardevice *pdev;
+} *leds_devp;
 
 
 static int
-leds_preempt(void *handle)
+leds_preempt (void *handle)
 {
-    return 1;
+  return 1;
 }
 
 /* Parport attach method */
 static void
-leds_attach(struct parport *port)
+leds_attach (struct parport *port)
 {
-    /* Register the parallel LED device with parport */
-    leds_devp->pdev = parport_register_device(port, DEVICE_NAME,
-                      leds_preempt, NULL,
-                      NULL, 0, NULL);
-    if (leds_devp->pdev == NULL) printk("Bad register\n");
+  printk (KERN_DEBUG "leds_attach %s line: %d\n", DEVICE_NAME, __LINE__);
+  /* Register the parallel LED device with parport */
+  leds_devp->pdev = parport_register_device (port, DEVICE_NAME,
+                         leds_preempt, NULL,
+                         NULL, 0, NULL);
+  if (leds_devp->pdev == NULL)
+    printk ("Bad register\n");
+  printk (KERN_DEBUG "leds_attach %s line: %d\n", DEVICE_NAME, __LINE__);
 }
 
 /* Parport detach method */
 static void
-leds_detach(struct parport *port)
+leds_detach (struct parport *port)
 {
-    /* Do nothing */
+  /* Do nothing */
 }
 
-unsigned char port_data_in(unsigned char offset, int bank);
-void port_data_out(unsigned char offset, unsigned char data, int bank);
+unsigned char port_data_in (unsigned char offset, int bank);
+void port_data_out (unsigned char offset, unsigned char data, int bank);
 
-int leds_open(struct inode *inode, struct file *file);
-int leds_release(struct inode *inode, struct file *file);
+int leds_open (struct inode *inode, struct file *file);
+int leds_release (struct inode *inode, struct file *file);
 // ssize_t leds_read(struct file *file, char *buf, size_t count, loff_t *ppos);
-ssize_t leds_write(struct file *file, const char *buf, size_t count, loff_t *ppos);
+ssize_t leds_write (struct file *file, const char *buf, size_t count,
+            loff_t * ppos);
 
 static struct file_operations leds_fops = {
-    .owner = THIS_MODULE,
-    .open = leds_open,
-    .release = leds_release,
-    .write = leds_write,
+  .owner = THIS_MODULE,
+  .open = leds_open,
+  .release = leds_release,
+  .write = leds_write,
 };
 
 static dev_t leds_dev_t_major_number;
-struct class * leds_class;
+struct class *leds_class;
 
 
 
 
 int
-leds_open(struct inode *inode, struct file *file)
+leds_open (struct inode *inode, struct file *file)
 {
-    struct leds_dev *leds_devp;
+  struct leds_dev *leds_devp = NULL;
 
-    /* Get the per-device structure that contains this cdev */
-    leds_devp = container_of(inode->i_cdev, struct leds_dev, cdev);
+  printk (KERN_DEBUG "leds_open %s line: %d\n", DEVICE_NAME, __LINE__);
 
-    /* Easy access to cmos_devp from rest of the entry points */
-    file->private_data = leds_devp;
+  /* Get the per-device structure that contains this cdev */
+  leds_devp = container_of (inode->i_cdev, struct leds_dev, cdev);
+  if (!leds_devp)
+    {
+      printk (KERN_ERR "leds_open %s failed to get container_of line: %d\n",
+          DEVICE_NAME, __LINE__);
+      return -1;
+    }
 
-    return 0;
+  /* Easy access to cmos_devp from rest of the entry points */
+  file->private_data = leds_devp;
+  printk (KERN_DEBUG "leds_open %s line: %d\n", DEVICE_NAME, __LINE__);
+  return 0;
 }
 
 
 int
-leds_release(struct inode *inode, struct file *file)
+leds_release (struct inode *inode, struct file *file)
 {
-    /* following is dummy code but might be useful later on*/
-    struct leds_dev *leds_devp = file->private_data;
-
-    return 0;
+  printk (KERN_DEBUG "leds_release %s line: %d\n", DEVICE_NAME, __LINE__);
+  /* following is dummy code but might be useful later on */
+  struct leds_dev *leds_devp = file->private_data;
+  printk (KERN_DEBUG "leds_release %s line: %d\n", DEVICE_NAME, __LINE__);
+  return 0;
 }
 
 ssize_t
-leds_read(struct file *file, char *buf,
-       size_t count, loff_t *ppos)
+leds_read (struct file * file, char *buf, size_t count, loff_t * ppos)
 {
-    unsigned char byte;
-    struct leds_dev *leds_devp = file->private_data;
-    parport_claim_or_block(leds_devp->pdev);
-    byte = parport_read_data(leds_devp->pdev->port);
-    parport_release(leds_devp->pdev);
+  unsigned char byte;
+  struct leds_dev *leds_devp = file->private_data;
+  parport_claim_or_block (leds_devp->pdev);
+  byte = parport_read_data (leds_devp->pdev->port);
+  parport_release (leds_devp->pdev);
 
-    if(copy_to_user(buf, &byte,1)){
-        printk(KERN_ERR "copy_from_user failed for %s line: %d\n", DEVICE_NAME, __LINE__);
-        return -EFAULT;
+  if (copy_to_user (buf, &byte, 1))
+    {
+      printk (KERN_ERR "copy_from_user failed for %s line: %d\n", DEVICE_NAME,
+          __LINE__);
+      return -EFAULT;
     }
-    return 0;
+  printk (KERN_DEBUG "byte: 0x%x\n", byte);
+  return count;
 }
 
 
 ssize_t
-leds_write(struct file *file, const char *buf,
-           size_t count, loff_t *ppos)
+leds_write (struct file * file, const char *buf, size_t count, loff_t * ppos)
 {
-    struct leds_dev *leds_devp = file->private_data;
-    char kbuf;
-    if(copy_from_user(&kbuf, buf,1)){
-        printk(KERN_ERR "copy_from_user failed for %s line: %d\n", DEVICE_NAME, __LINE__);
-        return -EFAULT;
+  struct leds_dev *leds_devp = file->private_data;
+  char kbuf;
+  printk (KERN_DEBUG "leds_write %s line: %d\n", DEVICE_NAME, __LINE__);
+  if (copy_from_user (&kbuf, buf, 1))
+    {
+      printk (KERN_ERR "copy_from_user failed for %s line: %d\n", DEVICE_NAME,
+          __LINE__);
+      return -EFAULT;
     }
-
-    parport_claim_or_block(leds_devp->pdev);
-    parport_write_data(leds_devp->pdev->port, kbuf);
-    parport_release(leds_devp->pdev);
-    return 0;
+  printk (KERN_DEBUG "leds_write %s line: %d\n", DEVICE_NAME, __LINE__);
+  parport_claim_or_block (leds_devp->pdev);
+  parport_write_data (leds_devp->pdev->port, kbuf);
+  parport_release (leds_devp->pdev);
+  printk (KERN_DEBUG "leds_write %s line: %d\n", DEVICE_NAME, __LINE__);
+  return count;
 }
 
 
-int __init leds_init(void) {
-
-    int ret = -ENODEV;
-    ret = alloc_chrdev_region(&leds_dev_t_major_number,0, 1, DEVICE_NAME);
-    if ( ret < 0) {
-        printk(KERN_ERR "alloc_chrdev_region failed for %s line: %d\n", DEVICE_NAME, __LINE__);
-        return ret;
-    }
-
-    leds_class = class_create(THIS_MODULE, DEVICE_NAME);
-    if (IS_ERR(leds_class)) {
-        printk(KERN_ERR "class_create failed for %s line: %d\n", DEVICE_NAME, __LINE__);
-        unregister_chrdev_region(leds_dev_t_major_number, 1);
-        return PTR_ERR(leds_class);
-    }
-
-    leds_devp = kmalloc(sizeof(struct leds_dev), GFP_KERNEL);
-    if (!leds_devp) {
-        printk(KERN_ERR "kmalloc failed for %s line: %d\n", DEVICE_NAME, __LINE__);
-        unregister_chrdev_region(leds_dev_t_major_number, 1);
-        class_destroy(leds_class);
-        leds_devp = NULL;
-        return -ENOMEM;
-    }
-
-    leds_devp->leds_parport_driver.name = DEVICE_NAME;
-    leds_devp->leds_parport_driver.attach = leds_attach;
-    leds_devp->leds_parport_driver.detach = leds_detach;
-
-    sprintf(leds_devp->name , "%s", DEVICE_NAME);
-    cdev_init(&leds_devp->cdev, &leds_fops);
-    leds_devp->cdev.owner = THIS_MODULE;
-
-    ret = cdev_add(&leds_devp->cdev, leds_dev_t_major_number,1);
-    if (ret < 0) {
-        printk(KERN_ERR "cdev_add failed for %s line: %d\n", DEVICE_NAME, __LINE__);
-        unregister_chrdev_region(leds_dev_t_major_number, 1);
-        class_destroy(leds_class);
-        if (leds_devp) {
-            cdev_del(&leds_devp->cdev);
-            kfree(leds_devp);
-            leds_devp = NULL;
-        }
-        return ret;
-    }
-
-    leds_devp->leds_device = device_create(leds_class, NULL, leds_dev_t_major_number , NULL, DEVICE_NAME);
-    if (IS_ERR(leds_devp->leds_device)) {
-        printk(KERN_ERR "device_create failed for %s line: %d\n", DEVICE_NAME, __LINE__);
-        unregister_chrdev_region(leds_dev_t_major_number, 1);
-        class_destroy(leds_class);
-        if (leds_devp) {
-            cdev_del(&leds_devp->cdev);
-            kfree(leds_devp);
-            leds_devp = NULL;
-        }
-        return PTR_ERR(leds_devp->leds_device);
-    }
-
-    ret = parport_register_driver(&leds_devp->leds_parport_driver);
-    if (ret) {
-        printk(KERN_ERR "parport_register_driver failed for %s line: %d\n", DEVICE_NAME, __LINE__);
-        if (leds_devp) {
-            cdev_del(&leds_devp->cdev);
-            device_del(leds_devp->leds_device);
-            kfree(leds_devp);
-            leds_devp = NULL;
-        }
-        unregister_chrdev_region(leds_dev_t_major_number, 1);
-        class_destroy(leds_class);
-        return ret;
-    }
-
-    printk("LEDS module initialized!\n");
-
-    return 0;
-
-}
-
-void __exit leds_exit(void)
+int __init
+leds_init (void)
 {
-    printk(KERN_DEBUG "parport_unregister_driver\n");
-    parport_unregister_driver(&leds_devp->leds_parport_driver);
-    if (leds_devp) {
-        printk("LEDS module free-ing\n");
-        cdev_del(&leds_devp->cdev);
-        device_del(leds_devp->leds_device);
-        kfree(leds_devp);
-        leds_devp = NULL;
+
+  int ret = -ENODEV;
+  ret = alloc_chrdev_region (&leds_dev_t_major_number, 0, 1, DEVICE_NAME);
+  if (ret < 0)
+    {
+      printk (KERN_ERR "alloc_chrdev_region failed for %s line: %d\n",
+          DEVICE_NAME, __LINE__);
+      return ret;
     }
 
-    printk("unregister_chrdev_region\n");
-    unregister_chrdev_region(leds_dev_t_major_number, 1);
+  leds_class = class_create (THIS_MODULE, DEVICE_NAME);
+  if (IS_ERR (leds_class))
+    {
+      printk (KERN_ERR "class_create failed for %s line: %d\n", DEVICE_NAME,
+          __LINE__);
+      unregister_chrdev_region (leds_dev_t_major_number, 1);
+      return PTR_ERR (leds_class);
+    }
 
-    printk("class_destroy\n");
-    class_destroy(leds_class);
-    return;
+  leds_devp = kmalloc (sizeof (struct leds_dev), GFP_KERNEL);
+  if (!leds_devp)
+    {
+      printk (KERN_ERR "kmalloc failed for %s line: %d\n", DEVICE_NAME,
+          __LINE__);
+      unregister_chrdev_region (leds_dev_t_major_number, 1);
+      class_destroy (leds_class);
+      leds_devp = NULL;
+      return -ENOMEM;
+    }
+
+  leds_devp->leds_parport_driver.name = DEVICE_NAME;
+  leds_devp->leds_parport_driver.attach = leds_attach;
+  leds_devp->leds_parport_driver.detach = leds_detach;
+
+  sprintf (leds_devp->name, "%s", DEVICE_NAME);
+  cdev_init (&leds_devp->cdev, &leds_fops);
+  leds_devp->cdev.owner = THIS_MODULE;
+
+  ret = cdev_add (&leds_devp->cdev, leds_dev_t_major_number, 1);
+  if (ret < 0)
+    {
+      printk (KERN_ERR "cdev_add failed for %s line: %d\n", DEVICE_NAME,
+          __LINE__);
+      unregister_chrdev_region (leds_dev_t_major_number, 1);
+      class_destroy (leds_class);
+      if (leds_devp)
+    {
+      cdev_del (&leds_devp->cdev);
+      kfree (leds_devp);
+      leds_devp = NULL;
+    }
+      return ret;
+    }
+
+  leds_devp->leds_device =
+    device_create (leds_class, NULL, leds_dev_t_major_number, NULL,
+           DEVICE_NAME);
+  if (IS_ERR (leds_devp->leds_device))
+    {
+      printk (KERN_ERR "device_create failed for %s line: %d\n", DEVICE_NAME,
+          __LINE__);
+      unregister_chrdev_region (leds_dev_t_major_number, 1);
+      class_destroy (leds_class);
+      if (leds_devp)
+    {
+      cdev_del (&leds_devp->cdev);
+      kfree (leds_devp);
+      leds_devp = NULL;
+    }
+      return PTR_ERR (leds_devp->leds_device);
+    }
+
+  ret = parport_register_driver (&leds_devp->leds_parport_driver);
+  if (ret)
+    {
+      printk (KERN_ERR "parport_register_driver failed for %s line: %d\n",
+          DEVICE_NAME, __LINE__);
+      if (leds_devp)
+    {
+      cdev_del (&leds_devp->cdev);
+      device_del (leds_devp->leds_device);
+      kfree (leds_devp);
+      leds_devp = NULL;
+    }
+      unregister_chrdev_region (leds_dev_t_major_number, 1);
+      class_destroy (leds_class);
+      return ret;
+    }
+
+  printk ("LEDS module initialized!\n");
+
+  return 0;
+
 }
 
-module_init(leds_init);
-module_exit(leds_exit);
+void __exit
+leds_exit (void)
+{
+  printk (KERN_DEBUG "parport_unregister_driver\n");
+  parport_unregister_driver (&leds_devp->leds_parport_driver);
+  if (leds_devp)
+    {
+      printk ("LEDS module free-ing\n");
+      cdev_del (&leds_devp->cdev);
+      device_del (leds_devp->leds_device);
+      kfree (leds_devp);
+      leds_devp = NULL;
+    }
+
+  printk ("unregister_chrdev_region\n");
+  unregister_chrdev_region (leds_dev_t_major_number, 1);
+
+  printk ("class_destroy\n");
+  class_destroy (leds_class);
+  return;
+}
+
+module_init (leds_init);
+module_exit (leds_exit);
