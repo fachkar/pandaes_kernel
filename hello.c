@@ -32,6 +32,7 @@
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/list.h>
+#include <linux/string.h>
 
 
 MODULE_LICENSE ( "Dual BSD/GPL" );
@@ -42,103 +43,86 @@ MODULE_VERSION ( "0.5.2" );
 
 #define DEVICE_NAME     "ledso"
 
-struct led_attr
-{
-    struct attribute attr;
-    ssize_t ( *show ) ( char * );
-    ssize_t ( *store ) ( const char *, size_t count );
-};
-
-
 struct leds_dev
 {
     char name[32];
+    int led_number;
     struct cdev cdev;
     struct device *leds_device;
     struct parport_driver leds_parport_driver;
     struct pardevice *pdev;
-    struct attribute **leds_attrbts;
-    struct kobj_type ktype_leds;
-    struct led_attr *leds_attr;
-    int lednum;
+    struct kobject *kobj_leds;
 } *leds_devp;
 
-static ssize_t
-store_led ( const char *buffer, size_t count )
+
+
+static ssize_t led_show(struct kobject *kobj, struct kobj_attribute *attr,
+                        char *buf)
 {
-    unsigned char buf;
+    unsigned char tmpbuf;
+    if (leds_devp) {
+        if (leds_devp->pdev) {
+            parport_claim_or_block(leds_devp->pdev);
+            tmpbuf = parport_read_data(leds_devp->pdev->port);
+            parport_release(leds_devp->pdev);
+            if (tmpbuf & (1 << leds_devp->led_number)) {
+                return sprintf(buf, "ON\n");
+            } else {
+                return sprintf(buf, "OFF\n");
+            }
+        }
+    }
+
+    return sprintf(buf, "UNKNOWN\n");
+
+}
+
+static ssize_t led_store(struct kobject *kobj, struct kobj_attribute *attr,
+                         const char *buf, size_t count)
+{
+    unsigned char tmpbuf;
     int value;
-    sscanf ( buffer, "%d", &value );
-    if ( leds_devp != NULL )
-    {
-        if ( leds_devp->pdev != NULL )
-        {
-            parport_claim_or_block ( leds_devp->pdev );
-            buf = parport_read_data ( leds_devp->pdev->port );
-            if ( value )
-            {
-                parport_write_data ( leds_devp->pdev->port, buf | ( 1 << leds_devp->lednum ) );
+    sscanf(buf, "%d", &value);
+    if (leds_devp) {
+        if (leds_devp->pdev) {
+            parport_claim_or_block(leds_devp->pdev);
+            tmpbuf = parport_read_data(leds_devp->pdev->port);
+            if (value) {
+                parport_write_data(leds_devp->pdev->port, tmpbuf | (1<<leds_devp->led_number));
+            } else {
+                parport_write_data(leds_devp->pdev->port, tmpbuf & ~(1<<leds_devp->led_number));
             }
-            else
-            {
-                parport_write_data ( leds_devp->pdev->port, buf & ~ ( 1 << leds_devp->lednum ) );
-            }
-            parport_release ( leds_devp->pdev );
-            return count;
+            parport_release(leds_devp->pdev);
         }
     }
     return count;
 }
 
-static ssize_t
-show_led ( char *buffer )
-{
-    unsigned char buf;
-    if ( leds_devp != NULL )
-    {
-        if ( leds_devp->pdev != NULL )
-        {
-            parport_claim_or_block ( leds_devp->pdev );
-            buf = parport_read_data ( leds_devp->pdev->port );
-            parport_release ( leds_devp->pdev );
-            if ( buf & ( 1 << 0 ) )
-            {
-                return sprintf ( buffer, "ON\n" );
-            }
-            else
-            {
-                return sprintf ( buffer, "OFF\n" );
-            }
-        }
-    }
-    return sprintf ( buffer, "unknown!\n" );
-}
 
-static ssize_t
-l_show ( struct kobject *kobj, struct attribute *a, char *buf )
-{
-    int ret;
-    struct led_attr *ledattr = container_of ( a, struct led_attr, attr );
-    ret = ledattr->show ? ledattr->show ( buf ) : -EIO;
-    return ret;
-}
+static struct kobj_attribute led1_attribute = __ATTR(led1, 0666, led_show, led_store);
+static struct kobj_attribute led2_attribute = __ATTR(led2, 0666, led_show, led_store);
+static struct kobj_attribute led3_attribute = __ATTR(led3, 0666, led_show, led_store);
+static struct kobj_attribute led4_attribute = __ATTR(led4, 0666, led_show, led_store);
+static struct kobj_attribute led5_attribute = __ATTR(led5, 0666, led_show, led_store);
+static struct kobj_attribute led6_attribute = __ATTR(led6, 0666, led_show, led_store);
+static struct kobj_attribute led7_attribute = __ATTR(led7, 0666, led_show, led_store);
+static struct kobj_attribute led8_attribute = __ATTR(led8, 0666, led_show, led_store);
 
-static ssize_t
-l_store ( struct kobject *kobj, struct attribute *a, const char *buf,
-          size_t count )
-{
-    int ret;
-    struct led_attr *ledattr = container_of ( a, struct led_attr, attr );
-    ret = ledattr->store ? ledattr->store ( buf, count ) : -EIO;
-    return ret;
-}
-
-static struct sysfs_ops leds_sysfs_ops =
-{
-    .show = l_show,
-    .store = l_store,
+static struct attribute *attrs[] = {
+    &led1_attribute.attr,
+    &led2_attribute.attr,
+    &led3_attribute.attr,
+    &led4_attribute.attr,
+    &led5_attribute.attr,
+    &led6_attribute.attr,
+    &led7_attribute.attr,
+    &led8_attribute.attr,
+    NULL,   /* need to NULL terminate the list of attributes */
 };
 
+static struct attribute_group attr_group = {
+    .attrs = attrs,
+};
 
 static int
 leds_preempt ( void *handle )
@@ -267,7 +251,7 @@ leds_write ( struct file * file, const char *buf, size_t count, loff_t * ppos )
 int __init
 leds_init ( void )
 {
-    int i = 0;
+
     int ret = -ENODEV;
     ret = alloc_chrdev_region ( &leds_dev_t_major_number, 0, 1, DEVICE_NAME );
     if ( ret < 0 )
@@ -305,42 +289,6 @@ leds_init ( void )
     cdev_init ( &leds_devp->cdev, &leds_fops );
     leds_devp->cdev.owner = THIS_MODULE;
 
-    leds_devp->leds_attrbts = kmalloc ( sizeof ( struct attribute* ) *9, GFP_KERNEL );
-    if ( !leds_devp->leds_attrbts )
-    {
-        printk ( KERN_ERR "kmalloc failed for %s line: %d\n", DEVICE_NAME,
-                 __LINE__ );
-        unregister_chrdev_region ( leds_dev_t_major_number, 1 );
-        class_destroy ( leds_class );
-        kfree ( leds_devp );
-        leds_devp = NULL;
-        return -ENOMEM;
-    }
-
-    leds_devp->leds_attr = kmalloc ( sizeof ( struct led_attr ) * 8, GFP_KERNEL );
-    if ( !leds_devp->leds_attr )
-    {
-        printk ( KERN_ERR "kmalloc failed for %s line: %d\n", DEVICE_NAME,
-                 __LINE__ );
-        unregister_chrdev_region ( leds_dev_t_major_number, 1 );
-        class_destroy ( leds_class );
-        kfree ( leds_devp->leds_attrbts );
-        kfree ( leds_devp );
-        leds_devp = NULL;
-        return -ENOMEM;
-    }
-
-    for ( i=0;i<8;++i )
-    {
-        leds_devp->leds_attr[i].attr.name = __stringify ( led##i);
-        leds_devp->leds_attr[i].attr.mode = 0666;
-        leds_devp->leds_attr[i].show = show_led;
-        leds_devp->leds_attr[i].store = store_led;
-        leds_devp->leds_attrbts[i] = & leds_devp->leds_attr[i].attr;
-    }
-
-    leds_devp->leds_attrbts[9] = NULL;
-
     ret = cdev_add ( &leds_devp->cdev, leds_dev_t_major_number, 1 );
     if ( ret < 0 )
     {
@@ -351,8 +299,6 @@ leds_init ( void )
         if ( leds_devp )
         {
             cdev_del ( &leds_devp->cdev );
-            kfree ( leds_devp->leds_attrbts );
-            kfree ( leds_devp->leds_attr );
             kfree ( leds_devp );
             leds_devp = NULL;
         }
@@ -371,8 +317,6 @@ leds_init ( void )
         if ( leds_devp )
         {
             cdev_del ( &leds_devp->cdev );
-            kfree ( leds_devp->leds_attrbts );
-            kfree ( leds_devp->leds_attr );
             kfree ( leds_devp );
             leds_devp = NULL;
         }
@@ -388,8 +332,6 @@ leds_init ( void )
         {
             cdev_del ( &leds_devp->cdev );
             device_del ( leds_devp->leds_device );
-            kfree ( leds_devp->leds_attrbts );
-            kfree ( leds_devp->leds_attr );
             kfree ( leds_devp );
             leds_devp = NULL;
         }
@@ -398,9 +340,30 @@ leds_init ( void )
         return ret;
     }
 
+    leds_devp->kobj_leds = kobject_create_and_add("ledscontrol",kernel_kobj);
+    if (!leds_devp->kobj_leds) {
+        printk ( KERN_ERR "kobject_create_and_add failed for %s line: %d\n",
+                 DEVICE_NAME, __LINE__ );
+        if ( leds_devp )
+        {
+            parport_unregister_driver ( &leds_devp->leds_parport_driver );
+            cdev_del ( &leds_devp->cdev );
+            device_del ( leds_devp->leds_device );
+            kfree ( leds_devp );
+            leds_devp = NULL;
+        }
+        unregister_chrdev_region ( leds_dev_t_major_number, 1 );
+        class_destroy ( leds_class );
+        return -ENOMEM;
+    }
+
+    ret = sysfs_create_group(leds_devp->kobj_leds, &attr_group);
+    if (ret)
+        kobject_put(leds_devp->kobj_leds);
+
     printk ( "LEDS module initialized!\n" );
 
-    return 0;
+    return ret;
 
 }
 
@@ -408,14 +371,15 @@ void __exit
 leds_exit ( void )
 {
     printk ( KERN_DEBUG "parport_unregister_driver\n" );
-    parport_unregister_driver ( &leds_devp->leds_parport_driver );
     if ( leds_devp )
     {
+        printk ( "LEDS kobject unregister\n" );
+        kobject_put(leds_devp->kobj_leds);
+        printk ( "LEDS parport_unregister_driver\n" );
+        parport_unregister_driver ( &leds_devp->leds_parport_driver );
         printk ( "LEDS module free-ing\n" );
         cdev_del ( &leds_devp->cdev );
         device_del ( leds_devp->leds_device );
-        kfree ( leds_devp->leds_attrbts );
-        kfree ( leds_devp->leds_attr );
         kfree ( leds_devp );
         leds_devp = NULL;
     }
