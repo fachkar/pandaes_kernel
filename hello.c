@@ -340,7 +340,7 @@ leds_init ( void )
         return ret;
     }
 
-    leds_devp->kobj_leds = kobject_create_and_add("ledscontrol",kernel_kobj);
+    leds_devp->kobj_leds = kobject_create_and_add("ledskobjs",kernel_kobj);
     if (!leds_devp->kobj_leds) {
         printk ( KERN_ERR "kobject_create_and_add failed for %s line: %d\n",
                  DEVICE_NAME, __LINE__ );
@@ -374,7 +374,7 @@ leds_exit ( void )
     if ( leds_devp )
     {
         printk ( "LEDS kobject unregister\n" );
-        kobject_put(leds_devp->kobj_leds);
+        kobject_del(leds_devp->kobj_leds);
         printk ( "LEDS parport_unregister_driver\n" );
         parport_unregister_driver ( &leds_devp->leds_parport_driver );
         printk ( "LEDS module free-ing\n" );
