@@ -39,9 +39,12 @@ MODULE_VERSION("20.5.0");
 
 static struct task_struct *ptr_my_task_struct1 = NULL;
 static struct task_struct *ptr_my_task_struct2 = NULL;
+static atomic_t atomic_counter1;
+static atomic_t atomic_counter2;
 static atomic_t atomic_thread1;
 static atomic_t atomic_thread2;
 static atomic_t atomic_wait_condition;
+static atomic_t atomic_wait_condition2;
 DECLARE_WAIT_QUEUE_HEAD(wait_queue_head);
 static struct task_struct *ptr_my_task_struct = NULL;
 static int gid = 0;
@@ -242,36 +245,49 @@ static int my_kthread_func1(void *my_arg)
 {
     static ktime_t entering, exiting;
     static s64 deltao = 0;
-    unsigned int cntro = 0;
+
     unsigned int rndm_uint = 0;
     char namebuf[20] = {'\0'};
 
     // NOTE: printing or ktime_get may sleep in interrupt context
     trace_printk(" >> entering %s\n", __func__);
+    if (in_irq())trace_printk(" >> %s inirq \n", __func__);
+    if (in_softirq())trace_printk(" >> %s in_softirq \n", __func__);
+    if (in_interrupt())trace_printk(" >> %s in_interrupt \n", __func__);
+    if (in_atomic())trace_printk(" >> %s in_atomic \n", __func__);
     entering = ktime_get();
 
-    while (!kthread_should_stop() && cntro++ < 150) {
+    atomic_set(&atomic_counter1, 0);
+    while (!kthread_should_stop() && atomic_read(&atomic_counter1) < 150) {
+        atomic_inc(&atomic_counter1);
+
         rndm_uint = get_random_int() >> 15;
 //         trace_printk("%s:%d, rndm_uint:%u\n", __func__, __LINE__, rndm_uint);
         udelay(rndm_uint);
 
-        /* no waiting for tasklet like kthreads */
-//         wait_event_interruptible_timeout(*ptr_wait_queue_head, atomic_read(&atomic_wait_condition)== 1, usecs_to_jiffies(100000));
-//         atomic_set(&atomic_wait_condition,0);
+        atomic_set(&atomic_wait_condition2, 1);
+        trace_printk("%s:%d waking up\n", __func__, __LINE__);
+        wake_up_all(&wait_queue_head);
 
-
-        sprintf(namebuf, "%s_%u", "cache_obj1", cntro);
+        sprintf(namebuf, "%s_%u", "cache_obj1", atomic_read(&atomic_counter1));
         rcu_read_lock();
         cache_add(namebuf);
         rcu_read_unlock();
     }
 
-    cntro = 0;
-    while (!kthread_should_stop() && cntro++ < 130) {
+    atomic_set(&atomic_counter1, 0);
+    while (!kthread_should_stop() && atomic_read(&atomic_counter1) < 130) {
+        atomic_inc(&atomic_counter1);
+
         rndm_uint = get_random_int() & 0x0E;
 //         trace_printk("%s:%d, rndm_uint:%u\n", __func__, __LINE__, rndm_uint);
         udelay(rndm_uint);
-        sprintf(namebuf, "%s_%u%c", "cache_obj1", cntro, '\0');
+
+        atomic_set(&atomic_wait_condition2, 1);
+        trace_printk("%s:%d waking up\n", __func__, __LINE__);
+        wake_up_all(&wait_queue_head);
+
+        sprintf(namebuf, "%s_%u%c", "cache_obj1", atomic_read(&atomic_counter1), '\0');
         cache_delete(rndm_uint);
     }
 
@@ -287,32 +303,48 @@ static int my_kthread_func2(void *my_arg)
 {
     static ktime_t entering, exiting;
     static s64 deltao = 0;
-    unsigned int cntro = 0;
+
     unsigned int rndm_uint = 0;
     char namebuf[20] = {'\0'};
 
     // NOTE: ktime_get may sleep in interrupt context
     trace_printk(" >> entering %s\n", __func__);
+    if (in_irq())trace_printk(" >> %s inirq \n", __func__);
+    if (in_softirq())trace_printk(" >> %s in_softirq \n", __func__);
+    if (in_interrupt())trace_printk(" >> %s in_interrupt \n", __func__);
+    if (in_atomic())trace_printk(" >> %s in_atomic \n", __func__);
     entering = ktime_get();
 
+    atomic_set(&atomic_counter2, 0);
+    while (!kthread_should_stop() && atomic_read(&atomic_counter2) < 100) {
+        atomic_inc(&atomic_counter2);
 
-    while (!kthread_should_stop() && cntro++ < 100) {
+        trace_printk("%s:%d waiting\n", __func__, __LINE__);
+        wait_event_interruptible_timeout(wait_queue_head, atomic_read(&atomic_wait_condition2) == 1, usecs_to_jiffies(100000));  /* since kthreads have higher priority work_stuct_functor runs ! */
+        atomic_set(&atomic_wait_condition2, 0);
+        trace_printk("%s:%d woke up\n", __func__, __LINE__);
+
         rndm_uint = get_random_int() >> 15;
-//         trace_printk("%s:%d, rndm_uint:%u\n", __func__, __LINE__, rndm_uint);
         udelay(rndm_uint);
-        sprintf(namebuf, "%s_%u%c", "cache_obj2", cntro, '\0');
+        sprintf(namebuf, "%s_%u%c", "cache_obj2", atomic_read(&atomic_counter2), '\0');
         rcu_read_lock();
         cache_add(namebuf);
         rcu_read_unlock();
 
     }
 
-    cntro = 0;
-    while (!kthread_should_stop() && cntro++ < 160) {
+    atomic_set(&atomic_counter2, 0);
+    while (!kthread_should_stop() && atomic_read(&atomic_counter2) < 160) {
+        atomic_inc(&atomic_counter2);
+
+        trace_printk("%s:%d waiting\n", __func__, __LINE__);
+        wait_event_interruptible_timeout(wait_queue_head, atomic_read(&atomic_wait_condition2) == 1, usecs_to_jiffies(100000));  /* since kthreads have higher priority work_stuct_functor runs ! */
+        atomic_set(&atomic_wait_condition2, 0);
+        trace_printk("%s:%d woke up\n", __func__, __LINE__);
+
         rndm_uint = get_random_int() & 0x0E;
-//         trace_printk("%s:%d, rndm_uint:%u\n", __func__, __LINE__, rndm_uint);
         udelay(rndm_uint);
-        sprintf(namebuf, "%s_%u", "cache_obj1", cntro);
+        sprintf(namebuf, "%s_%u", "cache_obj1", atomic_read(&atomic_counter2));
         rcu_read_lock();
         cache_find(rndm_uint);
         rcu_read_unlock();
@@ -334,6 +366,10 @@ static int my_task_func(void *my_arg)
 
     // NOTE: printing or ktime_get may sleep in interrupt context
     trace_printk(" >> entering %s\n", __func__);
+    if (in_irq())trace_printk(" >> %s inirq \n", __func__);
+    if (in_softirq())trace_printk(" >> %s in_softirq \n", __func__);
+    if (in_interrupt())trace_printk(" >> %s in_interrupt \n", __func__);
+    if (in_atomic())trace_printk(" >> %s in_atomic \n", __func__);
     entering = ktime_get();
 
     while (!kthread_should_stop()) {
@@ -356,6 +392,10 @@ static void work_stuct_functor(struct work_struct *argo_wrk_strct)
     wait_work_struct *ptr_workstrct_wrkquestrct = container_of(argo_wrk_strct, wait_work_struct, wrk_strct);
 
     trace_printk(" >> entering %s\n", __func__);
+    if (in_irq())trace_printk(" >> %s inirq \n", __func__);
+    if (in_softirq())trace_printk(" >> %s in_softirq \n", __func__);
+    if (in_interrupt())trace_printk(" >> %s in_interrupt \n", __func__);
+    if (in_atomic())trace_printk(" >> %s in_atomic \n", __func__);
     entering = ktime_get();
 
 
@@ -381,6 +421,10 @@ int __init my_init(void)
     static ktime_t entering, exiting;
     static s64 deltao = 0;
     trace_printk(" >> entering %s\n", __func__);
+    if (in_irq())trace_printk(" >> %s inirq \n", __func__);
+    if (in_softirq())trace_printk(" >> %s in_softirq \n", __func__);
+    if (in_interrupt())trace_printk(" >> %s in_interrupt \n", __func__);
+    if (in_atomic())trace_printk(" >> %s in_atomic \n", __func__);
     entering = ktime_get();
 
     atomic_set(&atomic_thread1, 0);
@@ -447,10 +491,15 @@ void __exit my_exit(void)
 
     trace_printk("  >> entering %s\n", __func__);
 
+    // no need because kthread_stop(ptr_my_task_struct2); flush_workqueue
+//     atomic_set(&atomic_wait_condition2, 1); /* this is because someone waits if is not 1 */
+//     atomic_set(&atomic_counter1, 99999);
+//     atomic_set(&atomic_counter2, 99999);
+//     wake_up_all(&wait_queue_head);
 
     if (ptr_my_task_struct2 != NULL)
         if (atomic_read(&atomic_thread2) == 0)
-            kthread_stop(ptr_my_task_struct2);
+            kthread_stop(ptr_my_task_struct2);  /* this will make it terminate even when waiting on condition */
 
 
     if (ptr_my_task_struct1 != NULL)
