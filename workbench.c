@@ -16,15 +16,18 @@
 #include <linux/log2.h>                 /* Needed for roundup_pow_of_two */
 #include <linux/rbtree.h>               /* Needed for Red-Black tree */
 #include <linux/gpio/consumer.h>        /* this is required to be gpiolib consumer */
+#include <linux/gpio.h>
 #include <linux/platform_device.h>		/* for platform device/driver */
 #include <linux/random.h>               /* add random support */
 #include <linux/rcupdate.h>             /* rcu related */
+#include <linux/of.h>                   /* for DT parsing et al */
+#include <linux/of_gpio.h>              /* for enum of_gpio_flags */
 
 MODULE_LICENSE("Dual BSD/GPL");
 MODULE_DESCRIPTION("This is cache list kthread testbench ;/");
 MODULE_AUTHOR("ferar aschkar");
-MODULE_VERSION("20.5.0");
-
+MODULE_VERSION("03.08.2017");
+MODULE_ALIAS("platform:gpo-61");
 
 /*
  * root@arm:~# echo 1 > /sys/kernel/debug/tracing/tracing_on
@@ -32,263 +35,174 @@ MODULE_VERSION("20.5.0");
  * root@arm:~# echo 0 > /sys/kernel/debug/tracing/trace
  */
 
-
-/* file:///home/ferar/pandaboard_es/linux-kernel-armv7-multiplatform/KERNEL/Documentation/DocBook/kernel-locking/efficiency-read-copy-update.html*/
-
-#define MAX_CACHE_SIZE 1000
-
-static struct task_struct *ptr_my_task_struct1 = NULL;
-static struct task_struct *ptr_my_task_struct2 = NULL;
-static atomic_t atomic_counter1;
-static atomic_t atomic_counter2;
-static atomic_t atomic_thread1;
-static atomic_t atomic_thread2;
-static atomic_t atomic_wait_condition;
-static atomic_t atomic_wait_condition2;
 DECLARE_WAIT_QUEUE_HEAD(wait_queue_head);
-static struct task_struct *ptr_my_task_struct = NULL;
-static int gid = 0;
+static struct task_struct *ptr_my_task_struct1 = NULL;
+static atomic_t atomic_thread1;
 
-typedef struct {
-    atomic_t atomic_contr;
-    struct work_struct wrk_strct;
-    struct workqueue_struct *ptr_wrk_queue_strct;
-
-} wait_work_struct;
-
-static wait_work_struct *ptr_workstrct_wrkquestrct = NULL;
-
-
-struct cache_node_struct {
-    struct list_head list_node;
-    struct rcu_head rcu;
-    unsigned int id;
-    char *name;
-    unsigned int popularity;
+struct gpo_61_data {
+    struct platform_device  *ptr_pdev;
+    struct gpio_desc *ptr_gpiodesc;
+    u8 can_sleep;
 };
-
-static LIST_HEAD(head_of_mylist);
-static struct cache_node_struct *ptr_cache_node = NULL;
-
-void cache_printo(void)
-{
-    struct cache_node_struct *ptr_tmp_pos = NULL;
-
-    trace_printk(" \t>>---------------------\n");
-    list_for_each_entry_rcu(ptr_tmp_pos, &head_of_mylist, list_node) {
-        if (ptr_tmp_pos != NULL) {
-            trace_printk(" \tcache_obj:%s id:%u, popularity:%u\n", ptr_tmp_pos->name, ptr_tmp_pos->id, ptr_tmp_pos->popularity);
-        }
-    }
-    trace_printk(" \t<<---------------------\n");
-}
-
-
-static void cache_delete_rcu_callback(struct rcu_head *argo)
-{
-    struct cache_node_struct *ptr_tmp_pos = container_of(argo, struct cache_node_struct, rcu);
-    if (ptr_tmp_pos != NULL) {
-        kfree(ptr_tmp_pos);
-        ptr_tmp_pos = NULL;
-    }
-}
-
-int cache_add(const char *nameo)
-{
-    static ktime_t entering, exiting;
-    static s64 deltao = 0;
-
-    unsigned int least_popularity = 99999;
-    struct cache_node_struct *ptr_tmp_pos = NULL;
-
-//     trace_printk(" >> entering %s nameo:%s\n", __func__, nameo);
-    entering = ktime_get();
-
-    ptr_cache_node = kzalloc(sizeof(struct cache_node_struct), GFP_ATOMIC);
-    if (IS_ERR(ptr_cache_node)) {
-        trace_printk("Error! %s:%d, ret:%ld\n", __func__, __LINE__, PTR_ERR(ptr_cache_node));
-        return -ENOMEM;
-    }
-
-    if (++gid > MAX_CACHE_SIZE) {
-        struct cache_node_struct *ptr_cache_node_leastpopular = NULL;
-
-        list_for_each_entry_rcu(ptr_tmp_pos, &head_of_mylist, list_node) {
-            if (ptr_tmp_pos != NULL) {
-                if (ptr_tmp_pos->popularity < least_popularity) {
-                    least_popularity = ptr_tmp_pos->popularity;
-                    ptr_cache_node_leastpopular = ptr_tmp_pos;
-                }
-            }
-        }
-
-        --gid;
-        ptr_cache_node->id = ptr_cache_node_leastpopular->id;
-        ptr_cache_node->popularity++;
-        ptr_cache_node->name = (char *)kzalloc(strlen(nameo) + 1, GFP_ATOMIC);
-        memset(ptr_cache_node->name, '\0', strlen(nameo) + 1);
-        if (IS_ERR(ptr_cache_node->name)) {
-            trace_printk("Error! %s:%d, ret:%ld\n", __func__, __LINE__, PTR_ERR(ptr_cache_node->name));
-            if (ptr_cache_node != NULL) {
-                kfree(ptr_cache_node);
-                ptr_cache_node = NULL;
-            }
-
-            return -ENOMEM;
-        }
-
-//         cache_printo();
-
-        list_del_rcu(&ptr_cache_node_leastpopular->list_node);
-        call_rcu(&ptr_cache_node_leastpopular->rcu, cache_delete_rcu_callback);
-
-        memcpy(ptr_cache_node->name, nameo, strlen(nameo));
-
-        list_add_tail_rcu(&ptr_cache_node->list_node, &head_of_mylist);
-
-//         cache_printo();
-
-
-    } else {
-        ptr_cache_node->id = gid;
-        ptr_cache_node->popularity++;
-        ptr_cache_node->name = (char *)kzalloc(strlen(nameo) + 1, GFP_ATOMIC);
-        memset(ptr_cache_node->name, '\0', strlen(nameo) + 1);
-        if (IS_ERR(ptr_cache_node->name)) {
-            trace_printk("Error! %s:%d, ret:%ld\n", __func__, __LINE__, PTR_ERR(ptr_cache_node->name));
-            if (ptr_cache_node != NULL) {
-                kfree(ptr_cache_node);
-                ptr_cache_node = NULL;
-            }
-
-            return -ENOMEM;
-        }
-
-        memcpy(ptr_cache_node->name, nameo, strlen(nameo));
-
-
-//         cache_printo();
-
-        list_add_tail_rcu(&ptr_cache_node->list_node, &head_of_mylist);
-
-//         cache_printo();
-    }
-
-    exiting = ktime_get();
-    deltao = ktime_to_ns(ktime_sub(exiting, entering));
-//     trace_printk(" << exiting %s, time took : %lld ns\n", __func__, deltao);
-    return 0;
-}
-
-int cache_delete(unsigned int ido)
-{
-    static ktime_t entering, exiting;
-    static s64 deltao = 0;
-    int reto = -1;
-    struct cache_node_struct *ptr_tmp_pos = NULL;
-
-//     trace_printk(" >> entering %s ido:%u\n", __func__,ido);
-    entering = ktime_get();
-
-//     cache_printo();
-    list_for_each_entry_rcu(ptr_tmp_pos, &head_of_mylist, list_node) {
-        if (ptr_tmp_pos != NULL) {
-            if (ptr_tmp_pos->id == ido) {
-                list_del_rcu(&ptr_tmp_pos->list_node);
-                call_rcu(&ptr_tmp_pos->rcu, cache_delete_rcu_callback);
-                reto = 0;
-                break;
-
-            }
-        }
-    }
-
-//     cache_printo();
-
-    exiting = ktime_get();
-    deltao = ktime_to_ns(ktime_sub(exiting, entering));
-//     trace_printk(" << exiting %s, time took : %lld ns\n", __func__, deltao);
-
-    return reto;
-}
-
-struct cache_node_struct *cache_find(unsigned int ido)
-{
-    static ktime_t entering, exiting;
-    static s64 deltao = 0;
-    struct cache_node_struct *ptr_tmp_pos = NULL;
-
-//     trace_printk(" >> entering %s ido:%u\n", __func__, ido);
-    entering = ktime_get();
-
-    list_for_each_entry_rcu(ptr_tmp_pos, &head_of_mylist, list_node) {
-        if (ptr_tmp_pos != NULL) {
-            if (ptr_tmp_pos->id == ido) {
-                ptr_tmp_pos->popularity++;
-                exiting = ktime_get();
-                deltao = ktime_to_ns(ktime_sub(exiting, entering));
-//                 trace_printk(" << exiting %s, time took : %lld ns\n", __func__, deltao);
-                return ptr_tmp_pos;
-            }
-        }
-    }
-
-    exiting = ktime_get();
-    deltao = ktime_to_ns(ktime_sub(exiting, entering));
-//     trace_printk(" << exiting %s, time took : %lld ns\n", __func__, deltao);
-
-    return ptr_tmp_pos;
-}
-
 
 static int my_kthread_func1(void *my_arg)
 {
     static ktime_t entering, exiting;
     static s64 deltao = 0;
-
+//     unsigned int cntro = 0;
+//     u32 temp_idreg = 0x0;
+    int rslt = -1;
     unsigned int rndm_uint = 0;
-    char namebuf[20] = {'\0'};
+
+    struct device_node *node_gpo61 = NULL;
+
+    struct gpo_61_data *ptr_gpo61_data = NULL;
+
+    const char *compatible_string = NULL;
+    const char *label_string = NULL;
+
+    bool is_compatible = 0, active_low = 0;
+    enum of_gpio_flags of_flags;
+
+    u32 gpio_number = 0;
+
+    entering = ktime_get();
 
     // NOTE: printing or ktime_get may sleep in interrupt context
     trace_printk(" >> entering %s\n", __func__);
-    if (in_irq())trace_printk(" >> %s inirq \n", __func__);
-    if (in_softirq())trace_printk(" >> %s in_softirq \n", __func__);
-    if (in_interrupt())trace_printk(" >> %s in_interrupt \n", __func__);
-    if (in_atomic())trace_printk(" >> %s in_atomic \n", __func__);
-    entering = ktime_get();
 
-    atomic_set(&atomic_counter1, 0);
-    while (!kthread_should_stop() && atomic_read(&atomic_counter1) < 150) {
-        atomic_inc(&atomic_counter1);
+
+    if (my_arg != NULL) {
+        ptr_gpo61_data = (struct gpo_61_data *) my_arg;
+        node_gpo61 = ptr_gpo61_data->ptr_pdev->dev.of_node;
 
         rndm_uint = get_random_int() >> 15;
 //         trace_printk("%s:%d, rndm_uint:%u\n", __func__, __LINE__, rndm_uint);
         udelay(rndm_uint);
 
-        atomic_set(&atomic_wait_condition2, 1);
-        trace_printk("%s:%d waking up\n", __func__, __LINE__);
-        wake_up_all(&wait_queue_head);
+        trace_printk(" %s:%d, node name:%s\n", __func__, __LINE__, of_node_full_name(node_gpo61));
 
-        sprintf(namebuf, "%s_%u", "cache_obj1", atomic_read(&atomic_counter1));
-        rcu_read_lock();
-        cache_add(namebuf);
-        rcu_read_unlock();
-    }
+        rslt = of_property_read_string(node_gpo61, "compatible", &compatible_string);
+        if (rslt == 0) {
+            trace_printk(" %s:%d, string property:%s\n", __func__, __LINE__, compatible_string);
+        } else {
+            trace_printk(" %s:%d, warnign could not get string property rslt:%d\n", __func__, __LINE__, rslt);
+        }
 
-    atomic_set(&atomic_counter1, 0);
-    while (!kthread_should_stop() && atomic_read(&atomic_counter1) < 130) {
-        atomic_inc(&atomic_counter1);
+        rslt = of_property_read_string(node_gpo61, "label", &label_string); // perhaps check this string in probe func
+        if (rslt == 0) {
+            trace_printk(" %s:%d, string property:%s\n", __func__, __LINE__, label_string);
+        } else {
+            trace_printk(" %s:%d, warnign could not get string property rslt:%d\n", __func__, __LINE__, rslt);
+        }
 
-        rndm_uint = get_random_int() & 0x0E;
-//         trace_printk("%s:%d, rndm_uint:%u\n", __func__, __LINE__, rndm_uint);
-        udelay(rndm_uint);
+        is_compatible = of_device_is_compatible(node_gpo61, "panda-es-gpo61");
+        if (is_compatible) {
+            trace_printk(" %s:%d, device compatible with driver :/\n", __func__, __LINE__);
+        }
 
-        atomic_set(&atomic_wait_condition2, 1);
-        trace_printk("%s:%d waking up\n", __func__, __LINE__);
-        wake_up_all(&wait_queue_head);
+        rslt = of_get_named_gpio_flags(node_gpo61, "outo-gpios", 0, &of_flags);
+        if (rslt < 0) {
+            trace_printk(" %s: %s warning can't get '%s' DT property\n", __func__, node_gpo61->name, "outo-gpios");
+        }
 
-        sprintf(namebuf, "%s_%u%c", "cache_obj1", atomic_read(&atomic_counter1), '\0');
-        cache_delete(rndm_uint);
+        active_low = of_flags & OF_GPIO_ACTIVE_LOW;
+
+        rslt = of_property_read_u32(node_gpo61, "gpio_number", &gpio_number);
+        if (rslt == 0) {
+            trace_printk(" %s:%d, gpio_number property:%u\n", __func__, __LINE__, gpio_number);
+
+            if (gpio_is_valid(gpio_number)) {
+                trace_printk(" %s: gpio_%u is valid\n", __func__, gpio_number);
+
+                /* earlier fromprobe we know that we have a valid desc to the DT node */
+
+                while (!kthread_should_stop()) {
+
+                        gpiod_set_value_cansleep(ptr_gpo61_data->ptr_gpiodesc, 1);
+                        wait_event_interruptible_timeout(wait_queue_head, 0 == 1, msecs_to_jiffies(100));
+
+
+                        gpiod_set_value_cansleep(ptr_gpo61_data->ptr_gpiodesc, 0);
+                        wait_event_interruptible_timeout(wait_queue_head, 0 == 1, msecs_to_jiffies(100));
+
+                        gpiod_set_value_cansleep(ptr_gpo61_data->ptr_gpiodesc, 1);
+                        wait_event_interruptible_timeout(wait_queue_head, 0 == 1, msecs_to_jiffies(100));
+
+                        gpiod_set_value_cansleep(ptr_gpo61_data->ptr_gpiodesc, 0);
+                        wait_event_interruptible_timeout(wait_queue_head, 0 == 1, msecs_to_jiffies(1000));
+                    }
+
+
+
+            } else {
+                trace_printk("%s: warning gpio_%u is NOT valid\n", __func__, gpio_number);
+            }
+
+        } else {
+            trace_printk(" %s:%d, warnign could not get gpio_number rslt:%d\n", __func__, __LINE__, rslt);
+        }
+
+
+
+        /* /home/ferar/Downloads/OMAP4460_ES.1x_PUBLIC_TRM_vM.pdf
+         * page 3829
+         * Table 18-387. CONTROL_CORE_PAD0_GPMC_NBE1_PAD1_GPMC_WAIT0
+         */
+
+
+        /* drivers/gpio/gpiolib-legacy.c */
+        /* All the same, a GPIO number passed to
+                gpio_to_desc() must have been properly acquired, and usage of the returned GPIO
+                descriptor is only possible after the GPIO number has been released. */
+        /*
+        rslt = gpio_request_one(61, GPIOF_OUT_INIT_LOW, "gpio-61");
+
+        if (rslt == 0) {
+            pgpio_desc =  gpio_to_desc(61);
+            if (!IS_ERR(pgpio_desc)) {
+
+                gpiod_direction_output(pgpio_desc, 1);
+                CONTROL_CORE_PAD0_GPMC_NBE1_PAD1_GPMC_WAIT0 = ioremap(0x4a100088, 0x020);
+                if (CONTROL_CORE_PAD0_GPMC_NBE1_PAD1_GPMC_WAIT0 != NULL) {
+                    temp_idreg = ioread32(CONTROL_CORE_PAD0_GPMC_NBE1_PAD1_GPMC_WAIT0);
+                    trace_printk(" %s, temp_idreg : 0x%x\n", __func__, temp_idreg);
+
+                    iowrite32(0x11b0003, CONTROL_CORE_PAD0_GPMC_NBE1_PAD1_GPMC_WAIT0);
+
+                    while (!kthread_should_stop() && cntro++ < 500) {
+
+                        gpiod_set_value_cansleep(pgpio_desc, 1);
+                        wait_event_interruptible_timeout(wait_queue_head, 0 == 1, msecs_to_jiffies(100));
+
+
+                        gpiod_set_value_cansleep(pgpio_desc, 0);
+                        wait_event_interruptible_timeout(wait_queue_head, 0 == 1, msecs_to_jiffies(100));
+
+                        gpiod_set_value_cansleep(pgpio_desc, 1);
+                        wait_event_interruptible_timeout(wait_queue_head, 0 == 1, msecs_to_jiffies(100));
+
+                        gpiod_set_value_cansleep(pgpio_desc, 0);
+                        wait_event_interruptible_timeout(wait_queue_head, 0 == 1, msecs_to_jiffies(1000));
+                    }
+
+
+
+                    iounmap(CONTROL_CORE_PAD0_GPMC_NBE1_PAD1_GPMC_WAIT0);
+                }
+
+
+            } else {
+                trace_printk(" %s, error:%ld\n", __func__, PTR_ERR(pgpio_desc));
+            }
+
+            gpio_free(61);
+
+        } else {
+            trace_printk(" %s warning: could not ioremap CONTROL_CORE_PAD0_GPMC_NBE1_PAD1_GPMC_WAIT0=0x4a100088!\n", __func__);
+        }
+
+        */
     }
 
     exiting = ktime_get();
@@ -299,182 +213,113 @@ static int my_kthread_func1(void *my_arg)
 }
 
 
-static int my_kthread_func2(void *my_arg)
+
+
+static int gpo_61_probe(struct platform_device *pdev)
 {
+    struct gpo_61_data *ptr_gpo61_data = NULL;
     static ktime_t entering, exiting;
     static s64 deltao = 0;
 
-    unsigned int rndm_uint = 0;
-    char namebuf[20] = {'\0'};
 
-    // NOTE: ktime_get may sleep in interrupt context
-    trace_printk(" >> entering %s\n", __func__);
-    if (in_irq())trace_printk(" >> %s inirq \n", __func__);
-    if (in_softirq())trace_printk(" >> %s in_softirq \n", __func__);
-    if (in_interrupt())trace_printk(" >> %s in_interrupt \n", __func__);
-    if (in_atomic())trace_printk(" >> %s in_atomic \n", __func__);
     entering = ktime_get();
+    trace_printk(" >> entering %s\n", __func__);
 
-    atomic_set(&atomic_counter2, 0);
-    while (!kthread_should_stop() && atomic_read(&atomic_counter2) < 100) {
-        atomic_inc(&atomic_counter2);
+    ptr_gpo61_data = kzalloc(sizeof(struct gpo_61_data), GFP_KERNEL);
+    if (IS_ERR(ptr_gpo61_data)) {
+        trace_printk("%s:%d, Error in kzalloc ret:%ld\n", __func__, __LINE__, PTR_ERR(ptr_gpo61_data));
+        return -ENOMEM; // or  PTR_ERR(ptr_gpo61_data)
+    }
 
-        trace_printk("%s:%d waiting\n", __func__, __LINE__);
-        wait_event_interruptible_timeout(wait_queue_head, atomic_read(&atomic_wait_condition2) == 1, usecs_to_jiffies(100000));  /* since kthreads have higher priority work_stuct_functor runs ! */
-        atomic_set(&atomic_wait_condition2, 0);
-        trace_printk("%s:%d woke up\n", __func__, __LINE__);
-
-        rndm_uint = get_random_int() >> 15;
-        udelay(rndm_uint);
-        sprintf(namebuf, "%s_%u%c", "cache_obj2", atomic_read(&atomic_counter2), '\0');
-        rcu_read_lock();
-        cache_add(namebuf);
-        rcu_read_unlock();
+    ptr_gpo61_data->ptr_gpiodesc = devm_gpiod_get(&pdev->dev, "outo", GPIOD_OUT_LOW); //  tek bir cagiriyla get gpio desc via its func name as per gpio-beeper.c (probe), more at Documentation gpio/board.txt, diger bir yol ( iki cagiriyla) as per leds-gpio.c (probe, create_gpio_led) */
+    if (IS_ERR(ptr_gpo61_data->ptr_gpiodesc)) {
+        trace_printk("%s:%d, Error in devm_gpiod_get ret:%ld\n", __func__, __LINE__, PTR_ERR(ptr_gpo61_data->ptr_gpiodesc));
+        return PTR_ERR(ptr_gpo61_data->ptr_gpiodesc);
 
     }
 
-    atomic_set(&atomic_counter2, 0);
-    while (!kthread_should_stop() && atomic_read(&atomic_counter2) < 160) {
-        atomic_inc(&atomic_counter2);
+    ptr_gpo61_data->ptr_pdev = pdev;
 
-        trace_printk("%s:%d waiting\n", __func__, __LINE__);
-        wait_event_interruptible_timeout(wait_queue_head, atomic_read(&atomic_wait_condition2) == 1, usecs_to_jiffies(100000));  /* since kthreads have higher priority work_stuct_functor runs ! */
-        atomic_set(&atomic_wait_condition2, 0);
-        trace_printk("%s:%d woke up\n", __func__, __LINE__);
+    platform_set_drvdata(pdev, ptr_gpo61_data);
 
-        rndm_uint = get_random_int() & 0x0E;
-        udelay(rndm_uint);
-        sprintf(namebuf, "%s_%u", "cache_obj1", atomic_read(&atomic_counter2));
-        rcu_read_lock();
-        cache_find(rndm_uint);
-        rcu_read_unlock();
-    }
+    atomic_set(&atomic_thread1, 0);
 
+    /* create a kthread in initial sleep mode */
+    ptr_my_task_struct1 = kthread_create(my_kthread_func1, ptr_gpo61_data, "%s", "my_kthreado1");
+
+    if (ptr_my_task_struct1 != NULL)
+        wake_up_process(ptr_my_task_struct1);
 
     exiting = ktime_get();
     deltao = ktime_to_ns(ktime_sub(exiting, entering));
     trace_printk(" << exiting %s, time took : %lld ns\n", __func__, deltao);
-    atomic_set(&atomic_thread2, 1);
-    do_exit(0);
-}
 
-
-static int my_task_func(void *my_arg)
-{
-    static ktime_t entering, exiting;
-    static s64 deltao = 0;
-
-    // NOTE: printing or ktime_get may sleep in interrupt context
-    trace_printk(" >> entering %s\n", __func__);
-    if (in_irq())trace_printk(" >> %s inirq \n", __func__);
-    if (in_softirq())trace_printk(" >> %s in_softirq \n", __func__);
-    if (in_interrupt())trace_printk(" >> %s in_interrupt \n", __func__);
-    if (in_atomic())trace_printk(" >> %s in_atomic \n", __func__);
-    entering = ktime_get();
-
-    while (!kthread_should_stop()) {
-        atomic_set(&atomic_wait_condition, 1);  /* make sure to set condition or it is in vain sending a wakeup signal*/
-        wake_up_all(&wait_queue_head);
-        msleep(100);
-    }
-
-    exiting = ktime_get();
-    deltao = ktime_to_ns(ktime_sub(exiting, entering));
-    trace_printk(" << exiting %s, time took : %lld ns\n", __func__, deltao);
     return 0;
 }
 
-
-static void work_stuct_functor(struct work_struct *argo_wrk_strct)
+static int gpo_61_remove(struct platform_device *pdev)
 {
+    struct gpo_61_data *ptr_gpo61_data = platform_get_drvdata(pdev);
+
     static ktime_t entering, exiting;
     static s64 deltao = 0;
-    wait_work_struct *ptr_workstrct_wrkquestrct = container_of(argo_wrk_strct, wait_work_struct, wrk_strct);
-
-    trace_printk(" >> entering %s\n", __func__);
-    if (in_irq())trace_printk(" >> %s inirq \n", __func__);
-    if (in_softirq())trace_printk(" >> %s in_softirq \n", __func__);
-    if (in_interrupt())trace_printk(" >> %s in_interrupt \n", __func__);
-    if (in_atomic())trace_printk(" >> %s in_atomic \n", __func__);
     entering = ktime_get();
 
+    trace_printk("  >> entering %s\n", __func__);
 
-    if (ptr_workstrct_wrkquestrct != NULL) {
-        while (atomic_read(&ptr_workstrct_wrkquestrct->atomic_contr) < 5) {
-
-            /* check remaining time/signal_pending */
-            wait_event_interruptible_timeout(wait_queue_head, atomic_read(&atomic_wait_condition) == 1, usecs_to_jiffies(100000));  /* since kthreads have higher priority work_stuct_functor runs ! */
-            atomic_set(&atomic_wait_condition, 0);
-            trace_printk("%s:%d, counter:%d\n", __func__, __LINE__, atomic_read(&ptr_workstrct_wrkquestrct->atomic_contr));
-            atomic_inc(&ptr_workstrct_wrkquestrct->atomic_contr);
-        }
+    if (IS_ERR(ptr_gpo61_data)) {
+        trace_printk("%s:%d, ret:%ld\n", __func__, __LINE__, PTR_ERR(ptr_gpo61_data));
+        return -EINVAL; // something went terribly wrong!
     }
+
+    devm_gpiod_put(&pdev->dev, ptr_gpo61_data->ptr_gpiodesc);   /* freeing as per gpio/consumer.txt */
+
+    kfree(ptr_gpo61_data);
 
     exiting = ktime_get();
     deltao = ktime_to_ns(ktime_sub(exiting, entering));
     trace_printk(" << exiting %s, time took : %lld ns\n", __func__, deltao);
+
+    return 0;
+
+
 }
 
+
+static const struct of_device_id of_gpo_61_match[] = {
+    { .compatible = "panda-es-gpo61", },
+    {},
+};
+
+MODULE_DEVICE_TABLE(of, of_gpo_61_match);
+
+static struct platform_driver gpo_61_driver = {
+    .probe		= gpo_61_probe,
+    .remove	    = gpo_61_remove,
+    .driver		= {
+        .name	= "gpo-61-driver",
+        .owner  = THIS_MODULE,
+//         .probe_type = PROBE_PREFER_ASYNCHRONOUS,
+        .of_match_table = of_gpo_61_match,
+    },
+};
 
 int __init my_init(void)
 {
     static ktime_t entering, exiting;
     static s64 deltao = 0;
-    trace_printk(" >> entering %s\n", __func__);
-    if (in_irq())trace_printk(" >> %s inirq \n", __func__);
-    if (in_softirq())trace_printk(" >> %s in_softirq \n", __func__);
-    if (in_interrupt())trace_printk(" >> %s in_interrupt \n", __func__);
-    if (in_atomic())trace_printk(" >> %s in_atomic \n", __func__);
+    int ret = -1;
+
     entering = ktime_get();
+    trace_printk(" >> entering %s\n", __func__);
 
-    atomic_set(&atomic_thread1, 0);
-    atomic_set(&atomic_thread2, 0);
-
-
-
-    ptr_workstrct_wrkquestrct = kzalloc(sizeof(wait_work_struct), GFP_KERNEL);
-    if (IS_ERR(ptr_workstrct_wrkquestrct)) {
-        pr_err("%s:%d, kzalloc error ret:%ld\n", __func__, __LINE__, PTR_ERR(ptr_workstrct_wrkquestrct));
-        return PTR_ERR(ptr_workstrct_wrkquestrct);
-    }
-
-    atomic_set(&ptr_workstrct_wrkquestrct->atomic_contr, 0);
-
-    INIT_WORK(&ptr_workstrct_wrkquestrct->wrk_strct, work_stuct_functor);
-
-    ptr_my_task_struct = kthread_create(my_task_func, NULL, "%s", "my_task_strcto");
-    if (ptr_my_task_struct != NULL) {
-        wake_up_process(ptr_my_task_struct);
-    }
-
-
-    ptr_workstrct_wrkquestrct->ptr_wrk_queue_strct = create_singlethread_workqueue("my_wrkque_strct");
-    if (IS_ERR(ptr_workstrct_wrkquestrct->ptr_wrk_queue_strct)) {
-        pr_err("%s:%d, ret:%ld\n", __func__, __LINE__, PTR_ERR(ptr_workstrct_wrkquestrct->ptr_wrk_queue_strct));
-        if (ptr_workstrct_wrkquestrct != NULL) {
-            kfree(ptr_workstrct_wrkquestrct);
-            ptr_workstrct_wrkquestrct = NULL;
-        }
-
-        return PTR_ERR(ptr_workstrct_wrkquestrct->ptr_wrk_queue_strct);
+    /* Registering platform driver with platform core bus */
+    ret = platform_driver_register(&gpo_61_driver);
+    if (ret != 0) {
+        trace_printk(" %s, Error  registering platform driver!\n", __func__);
+        return ret;
 
     }
-
-    queue_work(ptr_workstrct_wrkquestrct->ptr_wrk_queue_strct, &ptr_workstrct_wrkquestrct->wrk_strct);
-
-
-    /* create a kthread in initial sleep mode */
-    ptr_my_task_struct1 = kthread_create(my_kthread_func1, NULL, "%s", "my_kthreado1");
-    if (ptr_my_task_struct1 != NULL)
-        wake_up_process(ptr_my_task_struct1);
-
-    /* create a kthread in initial sleep mode */
-    ptr_my_task_struct2 = kthread_create(my_kthread_func2, NULL, "%s", "my_kthreado2");
-    if (ptr_my_task_struct2 != NULL)
-        wake_up_process(ptr_my_task_struct2);
-
-
-
 
     exiting = ktime_get();
     deltao = ktime_to_ns(ktime_sub(exiting, entering));
@@ -486,50 +331,18 @@ void __exit my_exit(void)
 {
     static ktime_t entering, exiting;
     static s64 deltao = 0;
-    struct cache_node_struct *ptr_tmp_pos = NULL;
     entering = ktime_get();
 
     trace_printk("  >> entering %s\n", __func__);
 
-    // no need because kthread_stop(ptr_my_task_struct2); flush_workqueue
-//     atomic_set(&atomic_wait_condition2, 1); /* this is because someone waits if is not 1 */
-//     atomic_set(&atomic_counter1, 99999);
-//     atomic_set(&atomic_counter2, 99999);
-//     wake_up_all(&wait_queue_head);
-
-    if (ptr_my_task_struct2 != NULL)
-        if (atomic_read(&atomic_thread2) == 0)
-            kthread_stop(ptr_my_task_struct2);  /* this will make it terminate even when waiting on condition */
+    /* Unregistering platform driver from Kernel */
+    platform_driver_unregister(&gpo_61_driver);
 
 
     if (ptr_my_task_struct1 != NULL)
         if (atomic_read(&atomic_thread1) == 0)
             kthread_stop(ptr_my_task_struct1);
 
-
-
-    while (!list_empty(&head_of_mylist)) {
-        ptr_tmp_pos = list_first_entry(&head_of_mylist, struct cache_node_struct, list_node);
-        if (ptr_tmp_pos != NULL) {
-            list_del_init(&ptr_tmp_pos->list_node);
-            kfree(ptr_tmp_pos);
-            ptr_tmp_pos = NULL;
-        }
-    }
-
-    if (ptr_workstrct_wrkquestrct != NULL) {
-        cancel_work_sync(&ptr_workstrct_wrkquestrct->wrk_strct);
-        if (ptr_workstrct_wrkquestrct->ptr_wrk_queue_strct != NULL) {
-            flush_workqueue(ptr_workstrct_wrkquestrct->ptr_wrk_queue_strct);
-            destroy_workqueue(ptr_workstrct_wrkquestrct->ptr_wrk_queue_strct);      // calls kfree(ptr_wrk_queue_strct);
-            ptr_workstrct_wrkquestrct->ptr_wrk_queue_strct = NULL;
-        }
-
-        kfree(ptr_workstrct_wrkquestrct);
-        ptr_workstrct_wrkquestrct = NULL;
-    }
-
-    kthread_stop(ptr_my_task_struct);
 
     exiting = ktime_get();
     deltao = ktime_to_ns(ktime_sub(exiting, entering));
@@ -540,5 +353,6 @@ void __exit my_exit(void)
 
 module_init(my_init);
 module_exit(my_exit);
+
 
 
